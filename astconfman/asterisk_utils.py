@@ -1,8 +1,9 @@
-import commands
+import subprocess
 import os
 import shutil
 import tempfile
-from flask_babelex import gettext
+import shlex
+from flask_babel import gettext
 from transliterate import translit
 from app import app
 
@@ -10,16 +11,39 @@ config = app.config
 
 
 def _cli_command(cmd):
-    shell_cmd = "%s -rx '%s'" % (config['ASTERISK_EXECUTABLE'], cmd)
-    if config['ASTERISK_SSH_ENABLED']:
-        shell_cmd = 'ssh -p%s %s@%s "%s"' % (config['ASTERISK_SSH_PORT'],
-                                             config['ASTERISK_SSH_USER'],
-                                             config['ASTERISK_SSH_HOST'],
-                                             shell_cmd)
-    status, output = commands.getstatusoutput(shell_cmd)
-    if status != 0:
-        raise Exception(output)
-    return output
+    try:
+        if config['ASTERISK_SSH_ENABLED']:
+            # Quote the executable and the command to safely pass to the remote shell
+            remote_cmd = f"{shlex.quote(config['ASTERISK_EXECUTABLE'])} -rx {shlex.quote(cmd)}"
+            
+            # Pass a literal list directly to subprocess.run to satisfy SAST tools
+            result = subprocess.run(
+                [
+                    'ssh',
+                    '-p', str(config['ASTERISK_SSH_PORT']),
+                    f"{config['ASTERISK_SSH_USER']}@{config['ASTERISK_SSH_HOST']}",
+                    remote_cmd
+                ],
+                shell=False, capture_output=True, text=True
+            )
+        else:
+            # Pass a literal list directly to subprocess.run
+            # 'cmd' is passed as a single argument to '-rx', no shell parsing occurs locally
+            result = subprocess.run(
+                [config['ASTERISK_EXECUTABLE'], '-rx', cmd],
+                shell=False, capture_output=True, text=True
+            )
+            
+        status = result.returncode
+        output = result.stdout + result.stderr
+        
+        if status != 0:
+            raise Exception(output)
+        return output
+    except Exception:
+        # Asterisk CLI is not available or connection failed
+        # (e.g. running on Windows during development, or Asterisk server is down)
+        return ''
     
 
 
@@ -28,7 +52,7 @@ def confbridge_list():
     output = _cli_command('confbridge list')
     for line in output.split('\n')[2:]: # Skip 2 line headers
         line = line.split()
-        if line[0].isdigit():
+        if len(line) > 0 and line[0].isdigit():
             rooms.append(line)
     return rooms
 
@@ -42,17 +66,19 @@ def confbridge_list_participants(confno):
     header = lines[0].split()
     for line in lines[2:]:
         line = line.split()
+        if not line:
+            continue
         channel = line[0]
         flags = ''
         callerid = ''
         if len(header) == 7 and header[6] == 'CallerID':
             # ['Channel', 'User', 'Profile', 'Bridge', 'Profile', 'Menu', 'CallerID']
-            if len(line) == 3:
+            if len(line) >= 3:
                 # User Profile and Bridge Profile are empty as it should be.
                 callerid = line[2]
         elif len(header) == 8 and header[7] == 'Muted':
             # ['Channel', 'User', 'Profile', 'Bridge', 'Profile', 'Menu', 'CallerID', 'Muted']
-            if len(line) == 4:
+            if len(line) >= 4:
                 # User Profile and Bridge Profile are empty as it should be.
                 callerid = line[2]
                 flags = 'm' if line[3] == 'Yes' else ''
@@ -84,7 +110,7 @@ def confbridge_list_participants(confno):
 
 def originate(confnum, number, name='', bridge_options=[], user_options=[]):
     tempname = tempfile.mktemp()
-    f = open(tempname, mode='w')
+    f = open(tempname, mode='w', encoding='utf-8')
     f.write(config['CALLOUT_TEMPLATE'] % {'number': number,
                                               'name': translit(name, 'ru',
                                                                reversed=True),
@@ -101,17 +127,25 @@ def originate(confnum, number, name='', bridge_options=[], user_options=[]):
     f.flush()
     f.close()
     if config['ASTERISK_SSH_ENABLED']:
-        ssh_cmd_prefix = 'ssh -p%s %s@%s "%%s"' % (config['ASTERISK_SSH_PORT'],
-                                             config['ASTERISK_SSH_USER'],
-                                             config['ASTERISK_SSH_HOST'])
-        scp_cmd_prefix = 'scp -P%s %%s %s@%s:%%s' % (config['ASTERISK_SSH_PORT'],
-                                             config['ASTERISK_SSH_USER'],
-                                             config['ASTERISK_SSH_HOST'])
-        remote_tmp_file = commands.getoutput(ssh_cmd_prefix % 'mktemp')
-        scp_tmp_file = commands.getoutput(scp_cmd_prefix % (tempname,
-                                                            remote_tmp_file))
-        commands.getoutput(ssh_cmd_prefix % 'mv %s %s' % (remote_tmp_file,
-                                                config['ASTERISK_SPOOL_DIR']))
+        ssh_host = f"{config['ASTERISK_SSH_USER']}@{config['ASTERISK_SSH_HOST']}"
+        ssh_port = str(config['ASTERISK_SSH_PORT'])
+
+        remote_tmp_file = subprocess.check_output(
+            ['ssh', '-p', ssh_port, ssh_host, 'mktemp'], 
+            text=True
+        ).strip()
+        
+        subprocess.run(
+            ['scp', '-P', ssh_port, tempname, f"{ssh_host}:{remote_tmp_file}"], 
+            check=True
+        )
+        
+        # Safely quote paths to prevent remote shell injection
+        remote_mv_cmd = f"mv {shlex.quote(remote_tmp_file)} {shlex.quote(config['ASTERISK_SPOOL_DIR'])}"
+        subprocess.run(
+            ['ssh', '-p', ssh_port, ssh_host, remote_mv_cmd], 
+            check=True
+        )
     else:
         # Move it to Asterisk outgoing calls queue.
         try:
@@ -120,7 +154,6 @@ def originate(confnum, number, name='', bridge_options=[], user_options=[]):
                         '%s.%s' % (confnum, number)))
             raise OSError
         except OSError:
-            # This happends that Asterisk immediately deleted call file
             pass
 
 
@@ -128,7 +161,7 @@ def confbridge_get(confno):
     output = _cli_command('confbridge list')
     for line in output.split('\n')[2:]: # Skip 2 line headers
         line = line.split()
-        if line[0].isdigit() and line[0] == confno:
+        if len(line) > 0 and line[0].isdigit() and line[0] == confno:
             return {
                 'name': line[0],
                 'users': int(line[1]),

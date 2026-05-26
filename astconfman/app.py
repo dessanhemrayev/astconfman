@@ -3,19 +3,20 @@ import json
 import os
 import gevent
 from gevent.queue import Queue
-from urllib import urlencode
+from urllib.parse import urlencode
+
 from flask import Flask, send_from_directory, request, Response, session
 from flask import g, redirect, url_for
 from flask_admin import Admin, AdminIndexView
-from flask_babelex import Babel, gettext, lazy_gettext
+from flask_babel import Babel, gettext, lazy_gettext
 from flask_migrate import Migrate
 from flask_security import Security, SQLAlchemyUserDatastore, \
     UserMixin, RoleMixin, login_required
-from flask_sqlalchemy import SQLAlchemy, models_committed
+from flask_sqlalchemy import SQLAlchemy
 
 
 app = Flask('AstConfMan', instance_relative_config=True)
-app.config.from_object('config')
+app.config.from_object('astconfman.config')
 
 
 # For smooth language switcher
@@ -40,13 +41,12 @@ migrate = Migrate(app, db)
 from flask_bootstrap import Bootstrap
 Bootstrap(app)
 
-babel = Babel(app)
-@babel.localeselector
 def get_locale():
     if request.args.get('lang'):
         session['lang'] = request.args.get('lang')        
     return session.get('lang', app.config.get('LANGUAGE'))
 
+babel = Babel(app, locale_selector=get_locale)
 
 # Define models
 roles_users = db.Table('roles_users',
@@ -74,6 +74,7 @@ class User(db.Model, UserMixin):
     confirmed_at = db.Column(db.DateTime())
     roles = db.relationship('Role', secondary=roles_users,
                             backref=db.backref('users', lazy='dynamic'))
+    fs_uniquifier = db.Column(db.String(255), unique=True, nullable=False)
 
     def __str__(self):
         return self.username
@@ -147,11 +148,12 @@ def favicon():
         mimetype='image/vnd.microsoft.icon')
 
 
-from views import asterisk
-app.register_blueprint(asterisk, url_prefix='/asterisk')
+from .views import asterisk_bp
+
+app.register_blueprint(asterisk_bp, url_prefix='/asterisk')
 
 
-from models import Contact, Conference, Participant, ParticipantProfile
-from models import ConferenceProfile
-from views import ContactAdmin, ParticipantProfileAdmin, ParticipantAdmin
-from views import ConferenceProfileAdmin, ConferenceAdmin, RecordingAdmin
+from .models import Contact, Conference, Participant, ParticipantProfile
+from .models import ConferenceProfile
+from .views import ContactAdmin, ParticipantProfileAdmin, ParticipantAdmin
+from .views import ConferenceProfileAdmin, ConferenceAdmin, RecordingAdmin

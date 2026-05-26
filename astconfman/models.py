@@ -1,12 +1,13 @@
 from os.path import dirname, join
 from datetime import datetime
-from flask_babelex import gettext, lazy_gettext
-from datetime import datetime
+from flask_babel import gettext, lazy_gettext
 from sqlalchemy.ext.hybrid import hybrid_property
-from flask_sqlalchemy import before_models_committed
-import asterisk
+from flask_sqlalchemy.track_modifications import before_models_committed
+
+
+from . import asterisk_utils as asterisk
 from crontab import CronTab
-from app import app, db, sse_notify
+from .app import app, db, sse_notify
 
 
 
