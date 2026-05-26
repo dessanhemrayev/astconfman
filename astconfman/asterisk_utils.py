@@ -2,6 +2,7 @@ import subprocess
 import os
 import shutil
 import tempfile
+import shlex
 from flask_babel import gettext
 from transliterate import translit
 from app import app
@@ -10,16 +11,25 @@ config = app.config
 
 
 def _cli_command(cmd):
-    shell_cmd = "%s -rx '%s'" % (config['ASTERISK_EXECUTABLE'], cmd)
+    # Safely split the command string into a list of arguments
+    cmd_args = shlex.split(cmd)
+    base_cmd = [config['ASTERISK_EXECUTABLE'], '-rx'] + cmd_args
+    
     if config['ASTERISK_SSH_ENABLED']:
-        shell_cmd = 'ssh -p%s %s@%s "%s"' % (config['ASTERISK_SSH_PORT'],
-                                             config['ASTERISK_SSH_USER'],
-                                             config['ASTERISK_SSH_HOST'],
-                                             shell_cmd)
+        # Quote each argument to safely pass to the remote shell via SSH
+        remote_cmd_str = ' '.join(shlex.quote(arg) for arg in base_cmd)
+        final_cmd = [
+            'ssh',
+            '-p', str(config['ASTERISK_SSH_PORT']),
+            f"{config['ASTERISK_SSH_USER']}@{config['ASTERISK_SSH_HOST']}",
+            remote_cmd_str
+        ]
+    else:
+        final_cmd = base_cmd
     
     try:
-        # Адаптация под Python 3 с помощью subprocess.run
-        result = subprocess.run(shell_cmd, shell=True, capture_output=True, text=True)
+        # Use shell=False with a list of arguments to prevent command injection
+        result = subprocess.run(final_cmd, shell=False, capture_output=True, text=True)
         status = result.returncode
         output = result.stdout + result.stderr
         
@@ -126,8 +136,10 @@ def originate(confnum, number, name='', bridge_options=[], user_options=[]):
             check=True
         )
         
+        # Safely quote paths to prevent remote shell injection
+        remote_mv_cmd = f"mv {shlex.quote(remote_tmp_file)} {shlex.quote(config['ASTERISK_SPOOL_DIR'])}"
         subprocess.run(
-            ['ssh', '-p', ssh_port, ssh_host, f"mv {remote_tmp_file} {config['ASTERISK_SPOOL_DIR']}"], 
+            ['ssh', '-p', ssh_port, ssh_host, remote_mv_cmd], 
             check=True
         )
     else:
