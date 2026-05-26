@@ -1,9 +1,10 @@
+import os
 import click
 from flask.cli import with_appcontext
 from flask_security.utils import hash_password
 
-from app import db, user_datastore
-from models import Contact, Conference, Participant, ParticipantProfile, ConferenceProfile
+from .app import db, user_datastore
+from .models import Contact, Conference, Participant, ParticipantProfile, ConferenceProfile
 
 def register_commands(app):
     """Регистрирует современные CLI-команды во Flask приложении."""
@@ -19,6 +20,12 @@ def register_commands(app):
     @with_appcontext
     def create_admin_command():
         """Создание ролей и суперпользователя admin (идемпотентная команда)."""
+        # Получаем пароль из переменной окружения
+        admin_password = os.environ.get("ADMIN_PASSWORD")
+        if not admin_password:
+            click.echo("ERROR: ADMIN_PASSWORD environment variable is required and must be non-empty.", err=True)
+            raise click.Abort()
+
         # Создаём или получаем роли
         admin_role = user_datastore.find_or_create_role(
             name="admin",
@@ -36,7 +43,7 @@ def register_commands(app):
         if not admin:
             admin = user_datastore.create_user(
                 username="admin",
-                password=hash_password("admin"),
+                password=hash_password(admin_password),
             )
 
         # Добавляем роль admin пользователю, если её ещё нет
@@ -50,6 +57,18 @@ def register_commands(app):
     @with_appcontext
     def init_command():
         """Полный сброс структуры БД и наполнение чистыми строковыми тестовыми данными."""
+        # Получаем пароли из переменных окружения
+        admin_password = os.environ.get("ADMIN_PASSWORD")
+        user_password = os.environ.get("USER_PASSWORD")
+
+        if not admin_password:
+            click.echo("ERROR: ADMIN_PASSWORD environment variable is required and must be non-empty.", err=True)
+            raise click.Abort()
+
+        if not user_password:
+            click.echo("ERROR: USER_PASSWORD environment variable is required and must be non-empty.", err=True)
+            raise click.Abort()
+
         click.echo("Сброс и инициализация базы данных...")
         db.drop_all()
         db.create_all()
@@ -57,11 +76,11 @@ def register_commands(app):
         # Создание ролей
         user_datastore.create_role(name='admin', description='System administrator')
         user_datastore.create_role(name='user', description='Conference user')
-        
+
         # Создание тестовых пользователей
-        admin = user_datastore.create_user(username='admin', email="admin@test.com", password=hash_password('admin'))
-        user = user_datastore.create_user(username='user', email="user@test.com", password=hash_password('user'))
-        
+        admin = user_datastore.create_user(username='admin', email="admin@test.com", password=hash_password(admin_password))
+        user = user_datastore.create_user(username='user', email="user@test.com", password=hash_password(user_password))
+
         user_datastore.add_role_to_user(admin, 'admin')
         user_datastore.add_role_to_user(user, 'user')
 

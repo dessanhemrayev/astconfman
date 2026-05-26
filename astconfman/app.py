@@ -16,7 +16,7 @@ from flask_sqlalchemy import SQLAlchemy
 
 
 app = Flask('AstConfMan', instance_relative_config=True)
-app.config.from_object('config')
+app.config.from_object('astconfman.config')
 
 
 # For smooth language switcher
@@ -148,12 +148,12 @@ def favicon():
         mimetype='image/vnd.microsoft.icon')
 
 
-from views import asterisk_bp
+from .views import asterisk_bp
 
 app.register_blueprint(asterisk_bp, url_prefix='/asterisk')
 
 
-from models import Contact, Conference, Participant, ParticipantProfile
-from models import ConferenceProfile
-from views import ContactAdmin, ParticipantProfileAdmin, ParticipantAdmin
-from views import ConferenceProfileAdmin, ConferenceAdmin, RecordingAdmin
+from .models import Contact, Conference, Participant, ParticipantProfile
+from .models import ConferenceProfile
+from .views import ContactAdmin, ParticipantProfileAdmin, ParticipantAdmin
+from .views import ConferenceProfileAdmin, ConferenceAdmin, RecordingAdmin

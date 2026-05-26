@@ -2,8 +2,14 @@ import json
 import os
 import sys
 import time
+import logging
 from os.path import dirname, join
 from crontab import CronTab
+try:
+    from urllib.request import urlopen
+    from urllib.error import URLError
+except ImportError:
+    from urllib2 import urlopen, URLError
 from flask import request, render_template, Response, redirect, url_for
 from flask import Blueprint, flash, abort, jsonify
 from flask_admin import  Admin, AdminIndexView, BaseView, expose
@@ -21,12 +27,12 @@ from flask_security.utils import hash_password as encrypt_password
 from markupsafe import Markup
 from wtforms.fields import PasswordField
 from wtforms.validators import DataRequired as Required, ValidationError
-from models import Contact, Conference, ConferenceLog, Participant
-from models import ConferenceProfile, ParticipantProfile, ConferenceSchedule
-from utils.validators import is_number, is_participant_uniq, is_crontab_valid
-from app import app, db, security, sse_notify, gettext, User, Role
-from forms import ContactImportForm, ConferenceForm
-from asterisk_utils import (
+from .models import Contact, Conference, ConferenceLog, Participant
+from .models import ConferenceProfile, ParticipantProfile, ConferenceSchedule
+from .utils.validators import is_number, is_participant_uniq, is_crontab_valid
+from .app import app, db, security, sse_notify, gettext, User, Role
+from .forms import ContactImportForm, ConferenceForm
+from .asterisk_utils import (
     confbridge_list_participants, confbridge_get, confbridge_kick,
     confbridge_kick_all, confbridge_mute, confbridge_unmute,
     confbridge_record_start, confbridge_record_stop,
@@ -1050,15 +1056,37 @@ except Exception as e:
 
 def event_listener_talk(event,**kwargs):
     txt = event.keys['CallerIDNum']
+    # Validate CallerIDNum is digits only
     if str(txt).isdigit():
         talkers.append(txt)
-        os.system(gettext('wget -O - --no-proxy http://localhost:5000/asterisk/get_talkers_on/%(conf)s/%(num)s 2>/dev/null', conf=event.keys['Conference'], num=txt))
+        conf = event.keys['Conference']
+        # Construct URL programmatically without shell commands
+        url = 'http://localhost:5000/asterisk/get_talkers_on/{}/{}'.format(conf, txt)
+        try:
+            # Make safe HTTP call with timeout
+            response = urlopen(url, timeout=5)
+            response.read()
+            response.close()
+        except (URLError, Exception) as e:
+            # Log error but don't crash
+            logging.warning("Failed to call talker event URL %s: %s", url, str(e))
 
 def event_listener_stoptalk(event,**kwargs):
     txt = event.keys['CallerIDNum']
+    # Validate CallerIDNum is digits only
     if str(txt).isdigit():
         talkers.remove(txt)
-        os.system(gettext('wget -O - --no-proxy http://localhost:5000/asterisk/get_talkers_off/%(conf)s/%(num)s 2>/dev/null', conf=event.keys['Conference'], num=txt))
+        conf = event.keys['Conference']
+        # Construct URL programmatically without shell commands
+        url = 'http://localhost:5000/asterisk/get_talkers_off/{}/{}'.format(conf, txt)
+        try:
+            # Make safe HTTP call with timeout
+            response = urlopen(url, timeout=5)
+            response.read()
+            response.close()
+        except (URLError, Exception) as e:
+            # Log error but don't crash
+            logging.warning("Failed to call talker event URL %s: %s", url, str(e))
 
 if client:
     client.add_event_listener(

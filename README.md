@@ -157,9 +157,9 @@ exten => _XXXX.,2,Set(ret=${CURL(${CONFMAN_HOST}/asterisk/dial_status/${conf_num
 ### Frequent errors
 #### Asterisk monitor path not accessible
 ```
-(env)max@linux:~/astconfman/astconfman$ ./manage.py init
+(env)max@linux:~/astconfman/astconfman$ flask --app run.py init
 Traceback (most recent call last):
-  File "./manage.py", line 7, in <module>
+  File "flask", line 7, in <module>
     from app import app, db, migrate
   File "/home/max/astconfman/astconfman/app.py", line 60, in <module>
     from views import asterisk
