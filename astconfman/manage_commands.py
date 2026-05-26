@@ -18,13 +18,33 @@ def register_commands(app):
     @app.cli.command("create-admin")
     @with_appcontext
     def create_admin_command():
-        """Создание ролей и суперпользователя admin."""
-        user_datastore.create_role(name='admin', description='System administrator')
-        user_datastore.create_role(name='user', description='Conference user')
-        admin = user_datastore.create_user(username='admin', password=hash_password('admin'))
-        user_datastore.add_role_to_user(admin, 'admin')
+        """Создание ролей и суперпользователя admin (идемпотентная команда)."""
+        # Создаём или получаем роли
+        admin_role = user_datastore.find_or_create_role(
+            name="admin",
+            description="System administrator",
+        )
+        user_role = user_datastore.find_or_create_role(
+            name="user",
+            description="Conference user",
+        )
+
+        # Ищем существующего пользователя admin
+        admin = user_datastore.find_user(username="admin")
+
+        # Создаём, только если ещё не существует
+        if not admin:
+            admin = user_datastore.create_user(
+                username="admin",
+                password=hash_password("admin"),
+            )
+
+        # Добавляем роль admin пользователю, если её ещё нет
+        if admin_role not in getattr(admin, "roles", []):
+            user_datastore.add_role_to_user(admin, admin_role)
+
         db.session.commit()
-        click.echo("Пользователь admin успешно создан.")
+        click.echo("Роли и пользователь admin успешно созданы/обновлены.")
 
     @app.cli.command("init")
     @with_appcontext
