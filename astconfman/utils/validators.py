@@ -1,4 +1,5 @@
-from flask_babelex import gettext
+from flask_babel import gettext
+
 from wtforms.validators import ValidationError
 from crontab import CronTab, CronItem
 from models import Participant

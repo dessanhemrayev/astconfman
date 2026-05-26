@@ -4,8 +4,7 @@ from flask_wtf import Form
 from flask_admin.form import BaseForm as BaseAdminForm
 from flask_wtf.file import FileField, file_required, file_allowed
 from wtforms.validators import ValidationError
-from flask_babelex import lazy_gettext as _
-
+from flask_babel import lazy_gettext as _
 
 class ContactImportForm(Form):
     filename = FileField(_('File'), validators=[

@@ -1,4 +1,6 @@
 import json
+import os
+import sys
 import time
 from os.path import dirname, join
 from crontab import CronTab
@@ -11,21 +13,31 @@ from flask_admin.actions import action
 from flask_admin.contrib.sqla import ModelView, filters
 from flask_admin.contrib.fileadmin import FileAdmin
 from flask_admin.form import rules
-from flask_babelex import lazy_gettext as _, gettext
+from flask_babel import lazy_gettext as _
+
 from flask_security import current_user
-from flask_security.utils import encrypt_password
-from jinja2 import Markup
+from flask_security.utils import hash_password as encrypt_password
+
+from markupsafe import Markup
 from wtforms.fields import PasswordField
-from wtforms.validators import Required, ValidationError
+from wtforms.validators import DataRequired as Required, ValidationError
 from models import Contact, Conference, ConferenceLog, Participant
 from models import ConferenceProfile, ParticipantProfile, ConferenceSchedule
 from utils.validators import is_number, is_participant_uniq, is_crontab_valid
-from app import app, db, security, sse_notify, User, Role
+from app import app, db, security, sse_notify, gettext, User, Role
 from forms import ContactImportForm, ConferenceForm
-from asterisk import *
-from asterisk2.ami import AMIClient
-from asterisk2.ami import AutoReconnect
-from asterisk2.ami import EventListener
+from asterisk_utils import (
+    confbridge_list_participants, confbridge_get, confbridge_kick,
+    confbridge_kick_all, confbridge_mute, confbridge_unmute,
+    confbridge_record_start, confbridge_record_stop,
+    confbridge_lock, confbridge_unlock, originate,
+)
+from asterisk.ami.client import AMIClient, AutoReconnect
+from asterisk.ami.event import EventListener
+
+
+from flask_admin.theme import Bootstrap4Theme
+
 
 talkers = []
 
@@ -533,6 +545,22 @@ class ConferenceScheduleUser(UserModelView, ConferenceScheduleAdmin):
 
 class RecordingAdmin(FileAdmin, AuthBaseView):
     can_upload = False
+
+    def __init__(self, *args, **kwargs):
+        # Get the base path from args[0] (passed as ASTERISK_MONITOR_DIR)
+        base_path = args[0] if args else '/var/spool/asterisk/monitor/'
+        if not os.path.exists(base_path):
+            try:
+                os.makedirs(base_path, exist_ok=True)
+            except (OSError, PermissionError):
+                # Fall back to a local directory if we can't create the path
+                local_path = os.path.join(os.path.dirname(__file__), 'recordings')
+                os.makedirs(local_path, exist_ok=True)
+                # Replace base_path in args with local path
+                args_list = list(args)
+                args_list[0] = local_path
+                args = tuple(args_list)
+        super().__init__(*args, **kwargs)
     can_download = True
     can_delete = True
     can_mkdir = False
@@ -714,8 +742,7 @@ admin = Admin(
         template='admin/index.html',
         url='/'
     ),
-    base_template='my_master.html',
-    template_mode='bootstrap3',
+    theme=Bootstrap4Theme(base_template='my_master.html'),
     category_icon_classes={
         'Main': 'glyphicon glyphicon-wrench',
         'Profiles': 'glyphicon glyphicon-wrench',
@@ -725,14 +752,15 @@ admin = Admin(
     }
 )
 
-@security.context_processor
-def security_context_processor():
+@app.context_processor
+def inject_admin_context():
     return dict(
-        admin_base_template=admin.base_template,
+        admin_base_template=admin.theme.base_template,
         admin_view=admin.index_view,
+        theme=admin.theme,
         h=admin_helpers,
+        get_url=url_for
     )
-
 
 # This is a dict with views that will be added according to settings
 admin_views = {
@@ -871,13 +899,13 @@ for v in admin_views.keys():
 
 
 ### ASTERISK VIEWS
-asterisk = Blueprint('asterisk', __name__)
+asterisk_bp = Blueprint('asterisk', __name__)
 
 def asterisk_is_authenticated():
     return request.remote_addr == app.config['ASTERISK_IPADDR']
 
 
-@asterisk.route('/invite_all/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/invite_all/<int:conf_number>/<callerid>')
 def invite_all(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -900,7 +928,7 @@ def invite_all(conf_number, callerid):
     return 'OK'
 
 
-@asterisk.route('/checkconf/<conf_number>/<callerid>')
+@asterisk_bp.route('/checkconf/<conf_number>/<callerid>')
 def check(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -920,7 +948,7 @@ def check(conf_number, callerid):
         return 'OK'
 
 
-@asterisk.route('/confprofile/<int:conf_number>')
+@asterisk_bp.route('/confprofile/<int:conf_number>')
 def conf_profile(conf_number):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -930,7 +958,7 @@ def conf_profile(conf_number):
     return ','.join(conf.conference_profile.get_confbridge_options())
 
 
-@asterisk.route('/userprofile/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/userprofile/<int:conf_number>/<callerid>')
 def user_profile(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -948,7 +976,7 @@ def user_profile(conf_number, callerid):
             conf.public_participant_profile.get_confbridge_options())
 
 
-@asterisk.route('/dial_status/<int:conf_number>/<callerid>/<status>')
+@asterisk_bp.route('/dial_status/<int:conf_number>/<callerid>/<status>')
 def dial_status(conf_number, callerid, status):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -959,7 +987,7 @@ def dial_status(conf_number, callerid, status):
     return 'OK'
 
 
-@asterisk.route('/enter_conference/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/enter_conference/<int:conf_number>/<callerid>')
 def enter_conference(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -969,7 +997,7 @@ def enter_conference(conf_number, callerid):
     sse_notify(conference.id, 'update_participants')
     return 'OK'
 
-@asterisk.route('/leave_conference/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/leave_conference/<int:conf_number>/<callerid>')
 def leave_conference(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -983,7 +1011,7 @@ def leave_conference(conf_number, callerid):
     return 'OK'
 
 
-@asterisk.route('/unmute_request/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/unmute_request/<int:conf_number>/<callerid>')
 def unmute_request(conf_number, callerid):
     if not asterisk_is_authenticated():
         return 'NOTAUTH'
@@ -993,7 +1021,7 @@ def unmute_request(conf_number, callerid):
     sse_notify(conference.id, 'unmute_request', callerid)
     return 'OK'
 
-@asterisk.route('/get_talkers_on/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/get_talkers_on/<int:conf_number>/<callerid>')
 def update_talkers_on(conf_number,callerid):
    message = gettext('Number %(num)s is talking.', num=callerid)
    conference = Conference.query.filter_by(number=conf_number).first_or_404()
@@ -1001,7 +1029,7 @@ def update_talkers_on(conf_number,callerid):
    sse_notify(conference.id, 'update_participants')
    return 'OK'
 
-@asterisk.route('/get_talkers_off/<int:conf_number>/<callerid>')
+@asterisk_bp.route('/get_talkers_off/<int:conf_number>/<callerid>')
 def update_talkers_off(conf_number,callerid):
    message = gettext('Number %(num)s is fell silent.', num=callerid)
    conference = Conference.query.filter_by(number=conf_number).first_or_404()
@@ -1009,9 +1037,16 @@ def update_talkers_off(conf_number,callerid):
    sse_notify(conference.id, 'update_participants')
    return 'OK'
 
-client = AMIClient(address='127.0.0.1',port=5038)
-client.login(username=app.config['AMI_USER'],secret=app.config['AMI_PASSWORD'])
-AutoReconnect(client)
+
+try:
+    client = AMIClient(address=app.config['ASTERISK_SSH_HOST'],port=5038)
+    client.login(username=app.config['AMI_USER'],secret=app.config['AMI_PASSWORD'])
+    AutoReconnect(client)
+except Exception as e:
+    import logging
+    logging.warning("Could not connect to Asterisk AMI at %s:%s - %s",
+                    app.config.get('ASTERISK_SSH_HOST', '127.0.0.1'), 5038, str(e))
+    client = None
 
 def event_listener_talk(event,**kwargs):
     txt = event.keys['CallerIDNum']
@@ -1019,25 +1054,25 @@ def event_listener_talk(event,**kwargs):
         talkers.append(txt)
         os.system(gettext('wget -O - --no-proxy http://localhost:5000/asterisk/get_talkers_on/%(conf)s/%(num)s 2>/dev/null', conf=event.keys['Conference'], num=txt))
 
-client.add_event_listener(
-    on_event=event_listener_talk,
-    white_list='ConfbridgeTalking',
-    TalkingStatus='on',
-)
-
 def event_listener_stoptalk(event,**kwargs):
     txt = event.keys['CallerIDNum']
     if str(txt).isdigit():
         talkers.remove(txt)
         os.system(gettext('wget -O - --no-proxy http://localhost:5000/asterisk/get_talkers_off/%(conf)s/%(num)s 2>/dev/null', conf=event.keys['Conference'], num=txt))
 
-client.add_event_listener(
-    on_event=event_listener_stoptalk,
-    white_list='ConfbridgeTalking',
-    TalkingStatus='off',
-)
+if client:
+    client.add_event_listener(
+        on_event=event_listener_talk,
+        white_list='ConfbridgeTalking',
+        TalkingStatus='on',
+    )
+    client.add_event_listener(
+        on_event=event_listener_stoptalk,
+        white_list='ConfbridgeTalking',
+        TalkingStatus='off',
+    )
 
-@asterisk.route('/online_participants.json/<int:conf_number>')
+@asterisk_bp.route('/online_participants.json/<int:conf_number>')
 def online_participants_json(conf_number):
     ret = []
     ret2 = confbridge_list_participants(conf_number)

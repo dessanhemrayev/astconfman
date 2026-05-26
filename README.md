@@ -88,8 +88,8 @@ Don't forget to enable talker detection events in participant profile settings a
 Now you should init database and run the server:
 ```
 cd astconfman
-./manage.py init
-./run.py
+flask --app run.py init
+flask --app run.py run
 ```
 Now visit http://localhost:5000/ in your browser.
 

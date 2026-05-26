@@ -1,8 +1,10 @@
 #!/usr/bin/env python   
 import sys
-from gevent.wsgi import WSGIServer
-from app import app
+from gevent.pywsgi import WSGIServer
+from manage_commands import register_commands
 
+from app import app
+register_commands(app)
 
 if __name__=='__main__':
     server = WSGIServer((app.config['LISTEN_ADDRESS'],
