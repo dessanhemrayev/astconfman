@@ -19,7 +19,7 @@ BRAND_LOGO = 'static/logo.png'
 BRAND_LOGO_URL = 'http://www.pbxware.ru/'
 
 # ASTERISK_IPADDR - IP Address of Asterisk server. All other requests will be denied.
-ASTERISK_IPADDR = '172.16.252.185'
+ASTERISK_IPADDR = '127.0.0.1'
 
 # LISTEN_ADDRESS - Interfaces to bind to. '0.0.0.0' for all interfaces.
 LISTEN_ADDRESS = '0.0.0.0'
@@ -55,7 +55,7 @@ ASTERISK_MONITOR_DIR = '/var/spool/asterisk/monitor/'
 ASTERISK_EXECUTABLE = '/usr/sbin/asterisk'
 ASTERISK_SSH_ENABLED = False
 ASTERISK_SSH_PORT = '22'
-ASTERISK_SSH_HOST = '172.16.252.185'
+ASTERISK_SSH_HOST = '127.0.0.1'
 ASTERISK_SSH_USER = 'server'
 ASTERISK_SSH_KEY = 'ssh-rsa AAAAB3NzaC1yc2EA...' # Put your key in instance config
 

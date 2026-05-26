@@ -1074,7 +1074,7 @@ def event_listener_talk(event,**kwargs):
 def event_listener_stoptalk(event,**kwargs):
     txt = event.keys['CallerIDNum']
     # Validate CallerIDNum is digits only
-    if str(txt).isdigit():
+    if str(txt).isdigit() and talkers:
         talkers.remove(txt)
         conf = event.keys['Conference']
         # Construct URL programmatically without shell commands
